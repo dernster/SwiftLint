@@ -9,9 +9,8 @@
 import Foundation
 import SourceKittenFramework
 
-public struct SpacedTypeDeclarationsRule: ASTRule, ConfigurationProviderRule, CorrectableRule {
-
-    public var configuration = SeverityConfiguration(.warning)
+public struct SpacedTypeDeclarationsRule: ASTRule, OptInRule, ConfigurationProviderRule, CorrectableRule {
+    public var configuration = SpacedTypeDelcarationsConfiguration()
     private var declarationTypes: [SwiftDeclarationKind] = [.class, .enum, .struct, .protocol, .extension]
 
     public static let description = RuleDescription(
@@ -110,25 +109,34 @@ public struct SpacedTypeDeclarationsRule: ASTRule, ConfigurationProviderRule, Co
 
     private func findErrors(startLine: Int, endLine: Int, file: File) -> [StyleViolation] {
         var errorLines = [Int]()
-        errorLines.append(contentsOf: checkBeforeAndAfterLines(line: startLine, file: file))
-        errorLines.append(contentsOf: checkBeforeAndAfterLines(line: endLine, file: file))
+        errorLines.append(contentsOf: checkOuterPadding(beginning: startLine - 1, end: endLine - 1, file: file))
+        errorLines.append(contentsOf: checkInnerPadding(beginning: startLine - 1, end: endLine - 1, file: file))
         return errorLines.unique.map { StyleViolation(
                 ruleDescription: type(of: self).description,
-                severity: self.configuration.severity,
+                severity: self.configuration.severityConfiguration.severity,
                 location: Location(file: file.path, line: $0, character: 1)
             )
         }
     }
 
-    private func checkBeforeAndAfterLines(line: Int, file: File) -> [Int] {
-        var nonEmptyLines = [Int]()
-        if line - 2 >= 0 && !isLineEmpty(line - 2, file: file) {
-            nonEmptyLines.append(line - 1)
-        }
-        if line < file.lines.count && !isLineEmpty(line, file: file) {
-            nonEmptyLines.append(line)
-        }
-        return nonEmptyLines
+    private func checkOuterPadding(beginning: Int, end: Int, file: File) -> [Int] {
+        let linesBeforeBeginning = beginning - 1..<beginning - 1 - configuration.outerPadding.beginning
+        let linesAfterEnd = end + 1..<end + 1 + configuration.outerPadding.end
+        return check(range: linesBeforeBeginning, file: file) + check(range: linesAfterEnd, file: file)
+    }
+
+    private func checkInnerPadding(beginning: Int, end: Int, file: File) -> [Int] {
+        let linesAfterBeginning = beginning + 1..<beginning + 1 + configuration.innerPadding.beginning
+        let linesBeforeEnd = end - 1..<end - 1 - configuration.innerPadding.end
+        return check(range: linesAfterBeginning, file: file) + check(range: linesBeforeEnd, file: file)
+    }
+
+    private func check(range: CountableRange<Int>, file: File) -> [Int] {
+        return range.filter {
+            $0 < file.lines.count &&
+            $0 >= 0 &&
+            !isLineEmpty($0, file: file)
+        }.map { $0 + 1 }
     }
 
     private func isLineEmpty(_ lineIndex: Int, file: File) -> Bool {
@@ -158,5 +166,4 @@ public struct SpacedTypeDeclarationsRule: ASTRule, ConfigurationProviderRule, Co
         file.write(lines.joined(separator: "\n") + "\n")
         return corrections
     }
-
 }
