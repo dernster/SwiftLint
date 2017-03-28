@@ -17,7 +17,7 @@ struct Padding: Equatable {
         return Padding(beginning: 1, end: 1)
     }
 
-    var description : String {
+    var description: String {
         return "(beginning: \(beginning), end: \(end))"
     }
 

@@ -9,13 +9,25 @@
 import Foundation
 import SourceKittenFramework
 
+struct LineError: Equatable {
+    let line: Int
+    let message: String
+
+    public static func == (lhs: LineError, rhs: LineError) -> Bool {
+        return lhs.line == rhs.line && lhs.message == rhs.message
+    }
+}
+
 public struct SpacedTypeDeclarationsRule: ASTRule, OptInRule, ConfigurationProviderRule, CorrectableRule {
     public var configuration = SpacedTypeDelcarationsConfiguration()
     private var declarationTypes: [SwiftDeclarationKind] = [.class, .enum, .struct, .protocol, .extension]
 
+    static let identifier = "spaced_type_declarations"
+    static let name = "Spaced Type Declarations"
+
     public static let description = RuleDescription(
-        identifier: "spaced_type_declarations",
-        name: "Spaced Type Declarations",
+        identifier: identifier,
+        name: name,
         description: "The start and end of a type declaration must be enclosed by two empty lines.",
         nonTriggeringExamples: [
             "class Example { }\n",
@@ -90,7 +102,15 @@ public struct SpacedTypeDeclarationsRule: ASTRule, OptInRule, ConfigurationProvi
         ]
     )
 
+    static let lineShouldBeEmpty = "Insert a new line at the end of this line!"
+    static let lineShouldNotBeEmpty = "Line should not be empty!"
+
     public init() {}
+
+    public func validate(file: File) -> [StyleViolation] {
+        let violations = validate(file: file, dictionary: file.structure.dictionary)
+        return violations.unique
+    }
 
     public func validate(file: File, kind: SwiftDeclarationKind,
                          dictionary: [String: SourceKitRepresentable]) -> [StyleViolation] {
@@ -99,8 +119,7 @@ public struct SpacedTypeDeclarationsRule: ASTRule, OptInRule, ConfigurationProvi
             let bodyOffset = dictionary.bodyOffset,
             let bodyLength = dictionary.bodyLength,
             let (startLine, _) = file.contents.bridge().lineAndCharacter(forByteOffset: bodyOffset),
-            let (endLine, _) = file.contents.bridge().lineAndCharacter(forByteOffset: bodyOffset + bodyLength),
-            startLine != endLine
+            let (endLine, _) = file.contents.bridge().lineAndCharacter(forByteOffset: bodyOffset + bodyLength)
         else {
             return []
         }
@@ -108,35 +127,49 @@ public struct SpacedTypeDeclarationsRule: ASTRule, OptInRule, ConfigurationProvi
     }
 
     private func findErrors(startLine: Int, endLine: Int, file: File) -> [StyleViolation] {
-        var errorLines = [Int]()
-        errorLines.append(contentsOf: checkOuterPadding(beginning: startLine - 1, end: endLine - 1, file: file))
-        errorLines.append(contentsOf: checkInnerPadding(beginning: startLine - 1, end: endLine - 1, file: file))
-        return errorLines.unique.map { StyleViolation(
-                ruleDescription: type(of: self).description,
+        var lineErrors = [LineError]()
+        lineErrors.append(contentsOf: checkOuterPadding(beginning: startLine - 1, end: endLine - 1, file: file))
+        lineErrors.append(contentsOf: checkInnerPadding(beginning: startLine - 1, end: endLine - 1, file: file))
+        return lineErrors.unique.map { StyleViolation(
+                ruleDescription: RuleDescription(
+                    identifier: SpacedTypeDeclarationsRule.identifier,
+                    name: SpacedTypeDeclarationsRule.name,
+                    description: $0.message
+                ),
                 severity: self.configuration.severityConfiguration.severity,
-                location: Location(file: file.path, line: $0, character: 1)
+                location: Location(file: file.path, line: $0.line, character: 1)
             )
         }
     }
 
-    private func checkOuterPadding(beginning: Int, end: Int, file: File) -> [Int] {
-        let linesBeforeBeginning = beginning - 1..<beginning - 1 - configuration.outerPadding.beginning
+    private func checkOuterPadding(beginning: Int, end: Int, file: File) -> [LineError] {
+        let linesBeforeBeginning = beginning - configuration.outerPadding.beginning..<beginning
         let linesAfterEnd = end + 1..<end + 1 + configuration.outerPadding.end
         return check(range: linesBeforeBeginning, file: file) + check(range: linesAfterEnd, file: file)
     }
 
-    private func checkInnerPadding(beginning: Int, end: Int, file: File) -> [Int] {
+    private func checkInnerPadding(beginning: Int, end: Int, file: File) -> [LineError] {
+        guard end > beginning + 1 else { return [] }
         let linesAfterBeginning = beginning + 1..<beginning + 1 + configuration.innerPadding.beginning
-        let linesBeforeEnd = end - 1..<end - 1 - configuration.innerPadding.end
+        let linesBeforeEnd = end - configuration.innerPadding.end..<end
         return check(range: linesAfterBeginning, file: file) + check(range: linesBeforeEnd, file: file)
     }
 
-    private func check(range: CountableRange<Int>, file: File) -> [Int] {
-        return range.filter {
+    private func check(range: CountableRange<Int>, file: File) -> [LineError] {
+        var linesWithErrors: [LineError] = range.filter {
             $0 < file.lines.count &&
             $0 >= 0 &&
             !isLineEmpty($0, file: file)
-        }.map { $0 + 1 }
+        }.map { LineError(line: $0 + 1, message: SpacedTypeDeclarationsRule.lineShouldBeEmpty) }
+
+        if range.lowerBound > 0 && isLineEmpty(range.lowerBound - 1, file: file) {
+            linesWithErrors.append(LineError(line: range.lowerBound, message: SpacedTypeDeclarationsRule.lineShouldNotBeEmpty))
+        }
+
+        if range.upperBound < file.lines.count && isLineEmpty(range.upperBound, file: file) {
+            linesWithErrors.append(LineError(line: range.upperBound + 1, message: SpacedTypeDeclarationsRule.lineShouldNotBeEmpty))
+        }
+        return linesWithErrors
     }
 
     private func isLineEmpty(_ lineIndex: Int, file: File) -> Bool {
