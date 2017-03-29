@@ -8,6 +8,15 @@
 
 import Foundation
 
+enum Priority: String {
+    case emptyLines = "empty_lines"
+    case nonEmptyLines = "non_empty_lines"
+
+    static var `default`: Priority {
+        return .emptyLines
+    }
+}
+
 struct Padding: Equatable {
 
     var beginning: Int
@@ -44,6 +53,7 @@ public struct SpacedTypeDelcarationsConfiguration: RuleConfiguration, Equatable 
     var severityConfiguration = SeverityConfiguration(.warning)
     var outerPadding: Padding = .default
     var innerPadding: Padding = .default
+    var priority: Priority = .default
 
     public var consoleDescription: String {
         return severityConfiguration.consoleDescription +
@@ -62,6 +72,14 @@ public struct SpacedTypeDelcarationsConfiguration: RuleConfiguration, Equatable 
 
         self.outerPadding = outerPadding
         self.innerPadding = innerPadding
+
+        if let priorityValue = configuration["priority"] {
+            if let priorityString = priorityValue as? String, let priority = Priority(rawValue: priorityString) {
+                self.priority = priority
+            } else {
+                throw ConfigurationError.unknownConfiguration
+            }
+        }
 
         if let severityString = configuration["severity"] as? String {
             try severityConfiguration.apply(configuration: severityString)
