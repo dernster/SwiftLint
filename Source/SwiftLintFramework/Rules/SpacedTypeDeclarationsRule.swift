@@ -12,14 +12,16 @@ import SourceKittenFramework
 fileprivate class LineCorrections {
 
     enum Correction: String {
-        case shouldBeEmpty = "Line should be empty"
+        case insertEmptyLineBefore = "Insert empty line before this line"
         case shouldNotBeEmpty = "Line should not be empty"
 
         func verify(file: File, lineIndex: Int) -> Bool {
             switch self {
-            case .shouldBeEmpty:
+            case .insertEmptyLineBefore:
+                guard lineIndex >= 0 && lineIndex < file.lines.count else { return true }
                 return LineCorrections.isLineEmpty(lineIndex, file: file)
             case .shouldNotBeEmpty:
+                guard lineIndex >= 0 && lineIndex < file.lines.count else { return true }
                 return !LineCorrections.isLineEmpty(lineIndex, file: file)
             }
         }
@@ -38,12 +40,8 @@ fileprivate class LineCorrections {
                 correction[lineIndex] = newValue
                 return
             }
-            // hay que hacer override solo si ambas no se cumplen.
-//            let currentCorrectionVerifies = currentCorrection.verify(file: file, lineIndex: lineIndex)
-//            let newCorrectionVerifies = newValue.verify(file: file, lineIndex: lineIndex)
-//            if !currentCorrectionVerifies && !newCorrectionVerifies {
-                let highPriorityCorrection: Correction = priority == .emptyLines ? .shouldBeEmpty : .shouldNotBeEmpty
-                correction[lineIndex] = currentCorrection == highPriorityCorrection ? highPriorityCorrection : newValue
+            let highPriorityCorrection: Correction = .insertEmptyLineBefore//priority == .emptyLines ? .shouldBeEmpty : .shouldNotBeEmpty
+            correction[lineIndex] = currentCorrection == highPriorityCorrection ? highPriorityCorrection : newValue
 //            } else if currentCorrectionVerifies {
 //                correction[lineIndex] = newValue
 //            }
@@ -51,13 +49,13 @@ fileprivate class LineCorrections {
     }
 
     func violations(file: File, severity: ViolationSeverity) -> [StyleViolation] {
-        var filteredCorrections = [Int: Correction]()
-        correction.forEach { key, value in
-            guard value == .shouldBeEmpty && correction[key - 1] == .shouldBeEmpty else {
-                filteredCorrections[key] = value
-                return
-            }
-        }
+        let filteredCorrections = correction//[Int: Correction]()
+//        correction.forEach { key, value in
+//            guard value == .shouldBeEmpty && correction[key - 1] == .shouldBeEmpty else {
+//                filteredCorrections[key] = value
+//                return
+//            }
+//        }
         return filteredCorrections.flatMap { lineIndex, correction in
             guard !correction.verify(file: file, lineIndex: lineIndex) else { return nil }
             return StyleViolation(
@@ -208,50 +206,71 @@ public struct SpacedTypeDeclarationsRule: Rule, OptInRule, ConfigurationProvider
     }
 
     private func checkOuterPadding(beginning: Int, end: Int, file: File) {
-        let linesBeforeBeginning = beginning - configuration.outerPadding.beginning..<beginning
-        let linesAfterEnd = end + 1..<end + 1 + configuration.outerPadding.end
-        check(range: linesBeforeBeginning, file: file, isOuter: true)
-        check(range: linesAfterEnd, file: file, isOuter: true)
+        if configuration.outerPadding.beginning == 1 {
+            lineCorrections[beginning, file] = .insertEmptyLineBefore
+            lineCorrections[beginning - 2, file] = .shouldNotBeEmpty
+        } else {
+            lineCorrections[beginning - 1, file] = .shouldNotBeEmpty
+        }
+
+        if configuration.outerPadding.end == 1 {
+            lineCorrections[end + 2, file] = .insertEmptyLineBefore
+            lineCorrections[end + 2, file] = .shouldNotBeEmpty
+        } else {
+            lineCorrections[end + 1, file] = .shouldNotBeEmpty // unless end of file?
+        }
     }
 
     private func checkInnerPadding(beginning: Int, end: Int, file: File) {
         guard end > beginning + 1 else { return }
-        let linesAfterBeginning = beginning + 1..<beginning + 1 + configuration.innerPadding.beginning
-        let linesBeforeEnd = end - configuration.innerPadding.end..<end
-        check(range: linesAfterBeginning, file: file, isOuter: false)
-        check(range: linesBeforeEnd, file: file, isOuter: false)
+        if configuration.innerPadding.beginning == 1 {
+            lineCorrections[beginning + 1, file] = .insertEmptyLineBefore
+            lineCorrections[beginning + 2, file] = .shouldNotBeEmpty
+        } else {
+            lineCorrections[beginning + 1, file] = .shouldNotBeEmpty
+        }
+
+        if configuration.innerPadding.end == 1 {
+            lineCorrections[end + 1, file] = .insertEmptyLineBefore
+            lineCorrections[end + 2, file] = .shouldNotBeEmpty
+        } else {
+            lineCorrections[end + 1, file] = .shouldNotBeEmpty
+        }
     }
 
-    private func check(range: CountableRange<Int>, file: File, isOuter: Bool) {
-        range.filter { $0 < file.lines.count && $0 >= 0 }.forEach { lineCorrections[$0, file] = .shouldBeEmpty }
-        guard isOuter else { return }
-        if range.lowerBound - 1 >= 0 && range.lowerBound - 1 < file.lines.count {
-            lineCorrections[range.lowerBound - 1, file] = .shouldNotBeEmpty
-        }
-        if range.upperBound >= 0 && range.upperBound < file.lines.count {
-            lineCorrections[range.upperBound, file] = .shouldNotBeEmpty
-        }
-    }
+//    private func check(range: CountableRange<Int>, file: File, isOuter: Bool, beginning: Int) {
+//        range.filter { $0 < file.lines.count && $0 >= 0 }.forEach { lineCorrections[$0, file] = .shouldBeEmpty }
+//        guard isOuter else { return }
+//        if range.upperBound == beginning {
+//            if range.lowerBound - 1 >= 0 && range.lowerBound - 1 < file.lines.count {
+//                lineCorrections[range.lowerBound - 1, file] = .shouldNotBeEmpty
+//            }
+//        } else {
+//            if range.upperBound >= 0 && range.upperBound < file.lines.count {
+//                lineCorrections[range.upperBound, file] = .shouldNotBeEmpty
+//            }
+//        }
+//    }
 
     public func correct(file: File) -> [Correction] {
         let ranges: [StyleViolation] = validate(file: file)
         guard !ranges.isEmpty else { return [] }
-        var lines: [String] = file.lines.map { $0.content }
-        var corrections = [Correction]()
+        let lines: [String] = file.lines.map { $0.content }
+        let corrections = [Correction]()
 
-        ranges.sorted { $0.location > $1.location }.forEach {
-            if let line = $0.location.line {
-                let lineRange = file.lines[line].range
-                if !file.ruleEnabled(violatingRanges: [lineRange], for: self).isEmpty {
-                    if $0.reason == LineCorrections.Correction.shouldBeEmpty.rawValue {
-                        lines.insert("", at: line)
-                    } else {
-                        lines.remove(at: line - 1)
-                    }
-                    corrections.append(Correction(ruleDescription: type(of: self).description, location: $0.location))
-                }
-            }
-        }
+//        ranges.sorted { $0.location > $1.location }.forEach {
+//            if let line = $0.location.line {
+//                let lineRange = file.lines[line].range
+//                if !file.ruleEnabled(violatingRanges: [lineRange], for: self).isEmpty {
+//                    if $0.reason == LineCorrections.Correction.shouldBeEmpty.rawValue {
+//                        lines.insert("", at: line)
+//                    } else {
+//                        lines.remove(at: line - 1)
+//                    }
+//                    corrections.append(Correction(ruleDescription: type(of: self).description, location: $0.location))
+//                }
+//            }
+//        }
 
         file.write(lines.joined(separator: "\n") + "\n")
         return corrections
